@@ -11,6 +11,7 @@ import com.seedfinding.mcfeature.structure.Shipwreck;
 import com.seedfinding.mcfeature.structure.Structure;
 import com.seedfinding.mcfeature.structure.TriangularStructure;
 import com.seedfinding.mcfeature.structure.UniformStructure;
+import kaptainwutax.seedcrackerX.SeedCracker;
 import kaptainwutax.seedcrackerX.config.ConfigScreen;
 import kaptainwutax.seedcrackerX.cracker.BiomeData;
 import kaptainwutax.seedcrackerX.cracker.DataAddedEvent;
@@ -45,8 +46,19 @@ public class DataStorage {
             return 0;
         }
 
-        double diff = getBits(s2.data.feature, false) - getBits(s1.data.feature, false);
-        return diff == 0 ? 1 : (int) Math.signum(diff);
+        // More bits first. The tie-breakers keep this a total order that agrees with Entry.equals,
+        // TreeSet relies on that to find duplicates.
+        int byBits = Double.compare(getBits(s2.data.feature, false), getBits(s1.data.feature, false));
+        if (byBits != 0) return byBits;
+        int byName = s1.data.feature.getName().compareTo(s2.data.feature.getName());
+        if (byName != 0) return byName;
+        int byVersion = s1.data.feature.getVersion().compareTo(s2.data.feature.getVersion());
+        if (byVersion != 0) return byVersion;
+        int byX = Integer.compare(s1.data.chunkX, s2.data.chunkX);
+        if (byX != 0) return byX;
+        int byZ = Integer.compare(s1.data.chunkZ, s2.data.chunkZ);
+        if (byZ != 0) return byZ;
+        return Integer.compare(System.identityHashCode(s1.data.feature), System.identityHashCode(s2.data.feature));
     };
     public ScheduledSet<Entry<Feature.Data<?>>> baseSeedData = new ScheduledSet<>(SEED_DATA_COMPARATOR);
     public HashedSeedData hashedSeedData = null;
@@ -88,19 +100,21 @@ public class DataStorage {
             this.biomeSeedData.dump();
             blockUpdateQueue.tick();
 
-            this.timeMachine.isRunning = true;
+            // clear() may swap in a new time machine while this one runs; only this one may be marked idle.
+            TimeMachine timeMachine = this.timeMachine;
+            timeMachine.isRunning = true;
 
-            this.timeMachine.SERVICE.submit(() -> {
+            TimeMachine.SERVICE.submit(() -> {
                 try {
                     this.scheduledData.removeIf(c -> {
                         c.accept(this);
                         return true;
                     });
-                } catch (Exception e) {
-                    e.printStackTrace();
+                } catch (Throwable t) {
+                    SeedCracker.LOGGER.error("Cracking step failed", t);
+                } finally {
+                    timeMachine.isRunning = false;
                 }
-
-                this.timeMachine.isRunning = false;
             });
         }
     }

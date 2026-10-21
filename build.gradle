@@ -58,6 +58,10 @@ dependencies {
 
 	include implementation("com.seedfinding:latticg:${project.latticg_version}")
 
+	testImplementation platform("org.junit:junit-bom:${project.junit_version}")
+	testImplementation "org.junit.jupiter:junit-jupiter"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+
 //	modRuntimeOnly("me.djtheredstoner:DevAuth-fabric:${project.devauth_version}") {
 //		exclude group: 'net.fabricmc', module: 'fabric-loader'
 //	}
@@ -88,6 +92,17 @@ tasks.register("prodClient", ClientProductionRunTask) {
 	javaLauncher = javaToolchains.launcherFor {
 		languageVersion = JavaLanguageVersion.of(25)
 	}
+}
+
+test {
+	useJUnitPlatform()
+}
+
+// Times the lifting search against the previous implementation: ./gradlew liftingBenchmark
+tasks.register("liftingBenchmark", JavaExec) {
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "kaptainwutax.seedcrackerX.cracker.search.LiftingBenchmark"
+	maxHeapSize = "4g"
 }
 
 tasks.withType(JavaCompile).configureEach {

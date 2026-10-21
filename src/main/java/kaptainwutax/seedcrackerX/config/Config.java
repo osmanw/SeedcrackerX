@@ -11,9 +11,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Reader;
+import java.io.Writer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 
 public class Config {
     private static final Logger logger = LoggerFactory.getLogger("config");
@@ -50,10 +53,20 @@ public class Config {
         // make sure that the config directory exists
         file.getParentFile().mkdirs();
 
-        try (FileWriter writer = new FileWriter(file)) {
-            gson.toJson(INSTANCE, writer);
+        // Write a temporary file and swap it in, so a crash mid-write can't leave a truncated config.
+        Path target = file.toPath();
+        Path temp = target.resolveSibling(file.getName() + ".tmp");
+        try {
+            try (Writer writer = Files.newBufferedWriter(temp)) {
+                gson.toJson(INSTANCE, writer);
+            }
+            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
             logger.error("seedcracker couldn't save config", e);
+            try {
+                Files.deleteIfExists(temp);
+            } catch (IOException ignored) {
+            }
         }
     }
 
@@ -63,10 +76,23 @@ public class Config {
         if (!file.exists()) return;
 
         try (Reader reader = new FileReader(file)) {
-            INSTANCE = gson.fromJson(reader, Config.class);
+            Config loaded = gson.fromJson(reader, Config.class);
+            if (loaded == null) throw new IOException("config file is empty");
+            INSTANCE = loaded;
         } catch (Exception e) {
-            logger.error("seedcracker couldn't load config, deleting it...", e);
-            file.delete();
+            logger.error("seedcracker couldn't load config, using the defaults", e);
+            backUpUnreadableConfig();
+        }
+    }
+
+    /** Moves an unreadable config aside instead of deleting it, so the next save doesn't overwrite it. */
+    private static void backUpUnreadableConfig() {
+        Path backup = file.toPath().resolveSibling(file.getName() + ".broken-" + System.currentTimeMillis());
+        try {
+            Files.move(file.toPath(), backup);
+            logger.warn("moved the unreadable config to {}", backup);
+        } catch (IOException e) {
+            logger.error("seedcracker couldn't move the unreadable config aside", e);
         }
     }
 

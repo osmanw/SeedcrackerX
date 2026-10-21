@@ -4,18 +4,20 @@ import com.seedfinding.mcbiome.source.OverworldBiomeSource;
 import com.seedfinding.mccore.rand.ChunkRand;
 import com.seedfinding.mccore.rand.seed.PillarSeed;
 import com.seedfinding.mccore.rand.seed.StructureSeed;
-import com.seedfinding.mccore.rand.seed.WorldSeed;
 import com.seedfinding.mccore.version.MCVersion;
 import com.seedfinding.mcfeature.Feature;
 import com.seedfinding.mcfeature.structure.OldStructure;
 import com.seedfinding.mcfeature.structure.PillagerOutpost;
+import com.seedfinding.mcfeature.structure.RegionStructure;
 import com.seedfinding.mcfeature.structure.Shipwreck;
-import com.seedfinding.mcfeature.structure.UniformStructure;
 import com.seedfinding.mcseed.lcg.LCG;
 import kaptainwutax.seedcrackerX.SeedCracker;
 import kaptainwutax.seedcrackerX.config.Config;
 import kaptainwutax.seedcrackerX.cracker.BiomeData;
 import kaptainwutax.seedcrackerX.cracker.decorator.Decorator;
+import kaptainwutax.seedcrackerX.cracker.search.HashedSeedSearch;
+import kaptainwutax.seedcrackerX.cracker.search.ParallelSearch;
+import kaptainwutax.seedcrackerX.cracker.search.StructureLifter;
 import kaptainwutax.seedcrackerX.util.Database;
 import kaptainwutax.seedcrackerX.util.Log;
 import net.minecraft.client.Minecraft;
@@ -26,30 +28,40 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
-import java.util.stream.LongStream;
-import java.util.stream.Stream;
 
 public class TimeMachine {
     private static final Logger logger = LoggerFactory.getLogger("timeMachine");
 
-    public ExecutorService SERVICE = Executors.newFixedThreadPool(10, Thread.ofPlatform().daemon().factory());
+    /** Runs the cracking steps. Shared by all time machines so clearing the data doesn't leak threads. */
+    public static final ExecutorService SERVICE = Executors.newFixedThreadPool(4, Thread.ofPlatform().daemon().factory());
+    /** Checking the hashed seed costs 2^16 SHA-256 hashes per structure seed. */
+    private static final int MAX_HASHED_SEED_CANDIDATES = 1 << 17;
+
     private final LCG inverseLCG = LCG.JAVA.combine(-2);
-    public boolean isRunning = false;
-    public boolean shouldTerminate = false;
+    public volatile boolean isRunning = false;
+    public volatile boolean shouldTerminate = false;
     public List<Integer> pillarSeeds = null;
-    public Set<Long> structureSeeds = new HashSet<>();
-    public Set<Long> worldSeeds = new HashSet<>();
+    public volatile Set<Long> structureSeeds = ConcurrentHashMap.newKeySet();
+    public final Set<Long> worldSeeds = ConcurrentHashMap.newKeySet();
     protected DataStorage dataStorage;
 
     public TimeMachine(DataStorage dataStorage) {
         this.dataStorage = dataStorage;
+    }
+
+    /** Replaces the structure seed candidates with a set that stays safe to read while the cracker runs. */
+    public void setStructureSeeds(Collection<Long> seeds) {
+        Set<Long> copy = ConcurrentHashMap.newKeySet(seeds.size());
+        copy.addAll(seeds);
+        this.structureSeeds = copy;
     }
 
     public void poke(Phase phase) {
@@ -117,56 +129,25 @@ public class TimeMachine {
 
     protected boolean pokeLifting() {
         if (!this.structureSeeds.isEmpty() || this.dataStorage.getLiftingBits() < 40F) return false;
-        List<UniformStructure.Data<?>> dataList = new ArrayList<>();
+        List<RegionStructure.Data<?>> dataList = new ArrayList<>();
 
         for (DataStorage.Entry<Feature.Data<?>> e : this.dataStorage.baseSeedData) {
             if (e.data.feature instanceof OldStructure || e.data.feature instanceof Shipwreck) {
-                dataList.add((UniformStructure.Data<?>) e.data);
+                dataList.add((RegionStructure.Data<?>) e.data);
             }
         }
-        List<Feature.Data<?>> cache = new ArrayList<>();
 
-        for (DataStorage.Entry<Feature.Data<?>> entry : this.dataStorage.baseSeedData) {
-            if (!(entry.data.feature instanceof Decorator) || entry.data.feature.getVersion().isOlderThan(MCVersion.v1_18)) {
-                if (!(entry.data.feature instanceof PillagerOutpost)) {
-                    cache.add(entry.data);
-                }
-            }
+        StructureLifter lifter = new StructureLifter(dataList, this.structureFilters());
+        if (!lifter.canLift()) {
+            Log.error("tmachine.cannotLift");
+            return false;
         }
+
         Log.warn("tmachine.startLifting", dataList.size());
+        StructureLifter.Result result = lifter.search(() -> this.shouldTerminate, ParallelSearch.Progress.NONE);
+        if (!result.complete()) return false;
 
-        // You could first lift on 1L<<18 with %2 since that would be a smaller range
-        // Then lift on 1<<19 with those 1<<18 fixed with % 4 and for nextInt(24)
-        // You can even do %8 on 1<<20 (however we included shipwreck so only nextInt(20) so 1<<19 is the max here
-        Stream<Long> lowerBitsStream = LongStream.range(0, 1L << 19).boxed().filter(lowerBits -> {
-            ChunkRand rand = new ChunkRand();
-            for (UniformStructure.Data<?> data : dataList) {
-                rand.setRegionSeed(lowerBits, data.regionX, data.regionZ, data.feature.getSalt(), Config.get().getVersion());
-                if (rand.nextInt(((UniformStructure<?>)data.feature).getOffset()) % 4 != data.offsetX % 4 ||
-                        rand.nextInt(((UniformStructure<?>)data.feature).getOffset()) % 4 != data.offsetZ % 4) {
-                    return false;
-                }
-            }
-            return true;
-        });
-
-        Stream<Long> seedStream = lowerBitsStream.flatMap(lowerBits ->
-                LongStream.range(0, 1L << (48 - 19))
-                        .boxed()
-                        .map(upperBits -> (upperBits << 19) | lowerBits)
-        );
-
-        Stream<Long> strutureSeedStream = seedStream.filter(seed -> {
-            ChunkRand rand = new ChunkRand();
-            for (Feature.Data<?> data : cache) {
-                if (!data.testStart(seed, rand)) {
-                    return false;
-                }
-            }
-            return true;
-        });
-
-        this.structureSeeds = strutureSeedStream.parallel().collect(Collectors.toSet());
+        this.setStructureSeeds(result.structureSeeds());
 
         if (!this.structureSeeds.isEmpty()) {
             Log.warn("tmachine.structureSeedSearchFinished");
@@ -182,72 +163,38 @@ public class TimeMachine {
         if (this.pillarSeeds == null || !this.structureSeeds.isEmpty() ||
                 this.dataStorage.getBaseBits() < this.dataStorage.getWantedBits()) return false;
 
-        List<Feature.Data<?>> cache = new ArrayList<>();
-
-        for (DataStorage.Entry<Feature.Data<?>> entry : this.dataStorage.baseSeedData) {
-            if (!(entry.data.feature instanceof Decorator) || entry.data.feature.getVersion().isOlderThan(MCVersion.v1_18)) {
-                if (!(entry.data.feature instanceof PillagerOutpost)) {
-                    cache.add(entry.data);
-                }
-            }
-        }
+        List<Feature.Data<?>> cache = this.structureFilters();
+        Set<Long> seeds = this.structureSeeds;
 
         for (int pillarSeed : this.pillarSeeds) {
             Log.debug("====================================");
             Log.warn("tmachine.lookingForStructureSeeds", pillarSeed);
 
-            AtomicInteger completion = new AtomicInteger();
-            ProgressListener progressListener = new ProgressListener();
+            boolean complete = ParallelSearch.forEachChunk(1L << 32, 1L << 22, () -> this.shouldTerminate, (from, to) -> {
+                ChunkRand rand = new ChunkRand();
 
-            for (int threadId = 0; threadId < 4; threadId++) {
-                int fThreadId = threadId;
+                for (long partialWorldSeed = from; partialWorldSeed < to; partialWorldSeed++) {
+                    long seed = this.timeMachine(partialWorldSeed, pillarSeed);
 
-                SERVICE.submit(() -> {
-                    ChunkRand rand = new ChunkRand();
+                    boolean matches = true;
 
-                    long lower = (long) fThreadId * (1L << 30);
-                    long upper = (long) (fThreadId + 1) * (1L << 30);
-
-                    for (long partialWorldSeed = lower; partialWorldSeed < upper && !this.shouldTerminate; partialWorldSeed++) {
-                        if ((partialWorldSeed & ((1 << 27) - 1)) == 0) {
-                            progressListener.addPercent(3.125F, true);
+                    for (Feature.Data<?> baseSeedDatum : cache) {
+                        if (!baseSeedDatum.testStart(seed, rand)) {
+                            matches = false;
+                            break;
                         }
-
-                        long seed = this.timeMachine(partialWorldSeed, pillarSeed);
-
-                        boolean matches = true;
-
-                        for (Feature.Data<?> baseSeedDatum : cache) {
-                            if (!baseSeedDatum.testStart(seed, rand)) {
-                                matches = false;
-                                break;
-                            }
-                        }
-
-                        if (matches) {
-                            this.structureSeeds.add(seed);
-                            Log.printSeed("foundStructureSeed", seed);
-                        }
-
                     }
 
-                    completion.getAndIncrement();
-                });
-            }
-
-            while (completion.get() != 4) {
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
+                    if (matches) {
+                        seeds.add(seed);
+                        Log.printSeed("foundStructureSeed", seed);
+                    }
                 }
+            }, progressLog());
 
-                if (this.shouldTerminate) {
-                    return false;
-                }
+            if (!complete) {
+                return false;
             }
-
-            progressListener.addPercent(0.0F, true);
         }
 
         if (!this.structureSeeds.isEmpty()) {
@@ -261,13 +208,16 @@ public class TimeMachine {
 
     protected boolean pokeBiomes() {
         if (this.structureSeeds.isEmpty() || this.worldSeeds.size() == 1) return false;
-        if (this.structureSeeds.size() > 1000) return false;
+        // The hashed seed is still cheap with many candidates; the decorator and biome searches aren't.
+        boolean fewCandidates = this.structureSeeds.size() <= 1000;
+        boolean hasHashedSeed = this.dataStorage.hashedSeedData != null && this.dataStorage.hashedSeedData.getHashedSeed() != 0;
+        if (!fewCandidates && !hasHashedSeed) return false;
 
         Log.debug("====================================");
 
         worldSeeds.clear();
         dataStorage.baseSeedData.dump();
-        if (Config.get().getVersion().isNewerOrEqualTo(MCVersion.v1_18) && dataStorage.getDecoratorBits() > 32F) {
+        if (fewCandidates && Config.get().getVersion().isNewerOrEqualTo(MCVersion.v1_18) && dataStorage.getDecoratorBits() > 32F) {
             Log.warn("tmachine.decoratorWorldSeedSearch");
             WorldgenRandom rand = new WorldgenRandom(new XoroshiroRandomSource(0));
 
@@ -311,18 +261,22 @@ public class TimeMachine {
 
         }
 
-        if (this.dataStorage.hashedSeedData != null && this.dataStorage.hashedSeedData.getHashedSeed() != 0) {
+        if (hasHashedSeed && this.structureSeeds.size() > MAX_HASHED_SEED_CANDIDATES) {
+            Log.warn("tmachine.tooManyForHashedSeed", this.structureSeeds.size());
+        } else if (hasHashedSeed) {
             Log.warn("tmachine.hashedSeedWorldSeedSearch");
-            for (long structureSeed : this.structureSeeds) {
-                WorldSeed.fromHash(structureSeed, this.dataStorage.hashedSeedData.getHashedSeed()).forEach(worldSeed -> {
-                    this.worldSeeds.add(worldSeed);
-                    Log.printSeed("tmachine.foundWorldSeed", worldSeed);
-                });
+            long[] candidates = this.structureSeeds.stream().mapToLong(Long::longValue).toArray();
+            HashedSeedSearch.Result result = HashedSeedSearch.search(candidates, this.dataStorage.hashedSeedData.getHashedSeed(),
+                    () -> this.shouldTerminate, candidates.length > 1000 ? progressLog() : ParallelSearch.Progress.NONE);
 
-                if (this.shouldTerminate) {
-                    return false;
-                }
+            if (!result.complete()) {
+                return false;
             }
+
+            result.worldSeeds().forEach(worldSeed -> {
+                this.worldSeeds.add(worldSeed);
+                Log.printSeed("tmachine.foundWorldSeed", worldSeed);
+            });
 
             if (!this.worldSeeds.isEmpty()) {
                 Log.warn("tmachine.worldSeedSearchFinished");
@@ -332,6 +286,8 @@ public class TimeMachine {
                 Log.error("tmachine.noResultsRevertingToBiomes");
             }
         }
+
+        if (!fewCandidates) return false;
 
         this.dataStorage.biomeSeedData.dump();
         if (this.dataStorage.notEnoughBiomeData()) {
@@ -438,16 +394,7 @@ public class TimeMachine {
         if (result.size() != 1) {
             this.dataStorage.baseSeedData.dump();
             this.dataStorage.baseSeedData.getBaseSet().removeIf(dataEntry -> !dataEntry.data.feature.getVersion().equals(Config.get().getVersion()));
-            List<Feature.Data<?>> cache = new ArrayList<>();
-
-            for (DataStorage.Entry<Feature.Data<?>> entry : this.dataStorage.baseSeedData) {
-                if (!(entry.data.feature instanceof Decorator) || entry.data.feature.getVersion().isOlderThan(MCVersion.v1_18)) {
-                    //todo remove this when libs are updated
-                    if (!(entry.data.feature instanceof PillagerOutpost)) {
-                        cache.add(entry.data);
-                    }
-                }
-            }
+            List<Feature.Data<?>> cache = this.structureFilters();
             ChunkRand rand = new ChunkRand();
 
             for (Long seed : this.structureSeeds) {
@@ -473,12 +420,41 @@ public class TimeMachine {
                 Log.warn("tmachine.succeedReducing", result.size());
             }
 
-            this.structureSeeds = result;
+            this.setStructureSeeds(result);
             return true;
         } else {
             Log.warn("tmachine.failedReducing");
         }
         return false;
+    }
+
+    /** Data every structure seed has to agree with. */
+    private List<Feature.Data<?>> structureFilters() {
+        List<Feature.Data<?>> cache = new ArrayList<>();
+
+        for (DataStorage.Entry<Feature.Data<?>> entry : this.dataStorage.baseSeedData) {
+            if (!(entry.data.feature instanceof Decorator) || entry.data.feature.getVersion().isOlderThan(MCVersion.v1_18)) {
+                //todo remove this when libs are updated
+                if (!(entry.data.feature instanceof PillagerOutpost)) {
+                    cache.add(entry.data);
+                }
+            }
+        }
+
+        return cache;
+    }
+
+    /** Logs progress in steps of 10%. */
+    private static ParallelSearch.Progress progressLog() {
+        AtomicInteger lastStep = new AtomicInteger();
+
+        return (done, total) -> {
+            int step = (int) (done * 10 / total);
+            int last = lastStep.get();
+            if (step > last && lastStep.compareAndSet(last, step)) {
+                Log.debug(Log.translate("tmachine.progress") + ": " + step * 10 + "%");
+            }
+        };
     }
 
     private void dispSearchEnd() {

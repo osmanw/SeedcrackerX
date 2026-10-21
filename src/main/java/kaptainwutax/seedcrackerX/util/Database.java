@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Database {
 
@@ -29,8 +30,9 @@ public class Database {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final String SEEDCRACKERX_USER_AGENT = "SeedcrackerX mod";
 
-    private static final Map<String, Long> connectionToSeed = new HashMap<>();
-    private static final Map<Long, Long> hashedSeedToSeed = new HashMap<>();
+    // Filled on the HTTP client's thread, read on the client thread.
+    private static final Map<String, Long> connectionToSeed = new ConcurrentHashMap<>();
+    private static final Map<Long, Long> hashedSeedToSeed = new ConcurrentHashMap<>();
 
     public static Component joinFakeServerForAuth() {
         try {
