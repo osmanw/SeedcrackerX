@@ -7,6 +7,7 @@ import kaptainwutax.seedcrackerX.render.Cuboid;
 import net.fabricmc.fabric.api.client.rendering.v1.RenderStateDataKey;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.minecraft.client.Camera;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.world.level.ChunkPos;
@@ -18,9 +19,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public class FinderQueue {
@@ -28,6 +32,10 @@ public class FinderQueue {
     private final static FinderQueue INSTANCE = new FinderQueue();
     private static final Logger log = LoggerFactory.getLogger(FinderQueue.class);
     private final ExecutorService SERVICE = Executors.newFixedThreadPool(5, Thread.ofPlatform().daemon().factory());
+    /** Bounds the scan backlog, which otherwise grows without limit while flying fast. */
+    private static final int MAX_PENDING_CHUNKS = 16384;
+    private final Map<Long, Level> pendingChunks = new ConcurrentHashMap<>();
+    private final AtomicBoolean warnedFull = new AtomicBoolean();
 
     private static final RenderStateDataKey<Set<Cuboid>> CUBOID_SET_KEY = RenderStateDataKey.create(() -> "SeedCrackerX cuboid set");
 
@@ -49,8 +57,25 @@ public class FinderQueue {
     public void onChunkData(Level world, ChunkPos chunkPos) {
         if (!Config.get().active) return;
 
-        getActiveFinderTypes().forEach(type -> {
-            SERVICE.submit(() -> {
+        long key = chunkPos.pack();
+        if (this.pendingChunks.size() >= MAX_PENDING_CHUNKS && !this.pendingChunks.containsKey(key)) {
+            if (this.warnedFull.compareAndSet(false, true)) {
+                log.warn("More than {} chunks are waiting to be scanned, skipping new ones. Use /seedcracker finder reload later.", MAX_PENDING_CHUNKS);
+            }
+            return;
+        }
+        // A chunk that is sent again while it still waits is scanned once.
+        if (this.pendingChunks.put(key, world) == world) return;
+
+        List<Finder.Type> types = getActiveFinderTypes();
+        SERVICE.submit(() -> {
+            this.pendingChunks.remove(key, world);
+            // Skip chunks the player left behind, or a world they already left.
+            if (world != Minecraft.getInstance().level || world.getChunkSource().getChunkNow(chunkPos.x(), chunkPos.z()) == null) {
+                return;
+            }
+
+            for (Finder.Type type : types) {
                 try {
                     List<Finder> finders = type.finderBuilder.build(world, chunkPos);
 
@@ -61,9 +86,9 @@ public class FinderQueue {
                         }
                     });
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    log.error("{} finder failed on chunk {}", type, chunkPos, e);
                 }
-            });
+            }
         });
     }
 

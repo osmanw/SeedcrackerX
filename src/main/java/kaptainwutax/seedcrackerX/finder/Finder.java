@@ -26,7 +26,8 @@ import java.util.stream.Collectors;
 
 public abstract class Finder {
 
-    protected static final List<BlockPos> CHUNK_POSITIONS = new ArrayList<>();
+    /** Replaced as a whole on dimension change, never modified, so finder threads can iterate it while that happens. */
+    protected static volatile List<BlockPos> CHUNK_POSITIONS = List.of();
     protected static final List<BlockPos> SUB_CHUNK_POSITIONS = new ArrayList<>();
     protected static HeightContext heightContext;
 
