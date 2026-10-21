@@ -232,7 +232,7 @@ public class Dungeon extends Decorator<Decorator.Config, Dungeon.Data> {
                     Log.warn("dungeon.finishedNeedAnotherOne");
                 } else if (result.size() == 1) {
                     result.forEach(seed -> Log.printSeed("foundStructureSeed", seed));
-                    dataStorage.getTimeMachine().structureSeeds = result;
+                    dataStorage.getTimeMachine().setStructureSeeds(result);
                     dataStorage.getTimeMachine().poke(TimeMachine.Phase.BIOMES);
                 } else {
                     Log.warn("wtf, this message means something isnt working as it should");
@@ -257,7 +257,7 @@ public class Dungeon extends Decorator<Decorator.Config, Dungeon.Data> {
                 }
                 if (result.size() == 1) {
                     result.forEach(seed -> Log.printSeed("crossCompare", seed));
-                    dataStorage.getTimeMachine().structureSeeds = result;
+                    dataStorage.getTimeMachine().setStructureSeeds(result);
                 }
                 dataStorage.getTimeMachine().poke(TimeMachine.Phase.BIOMES);
             }

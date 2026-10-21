@@ -119,7 +119,7 @@ public class WarpedFungus extends Decorator<Decorator.Config, WarpedFungus.Data>
                 Log.debug("====================================");
                 result.forEach(seed -> Log.printSeed("crossCompare", seed));
                 Log.warn("fungus.usableAsWorldSeed");
-                dataStorage.getTimeMachine().structureSeeds = result;
+                dataStorage.getTimeMachine().setStructureSeeds(result);
             }
             dataStorage.getTimeMachine().poke(TimeMachine.Phase.BIOMES);
         }

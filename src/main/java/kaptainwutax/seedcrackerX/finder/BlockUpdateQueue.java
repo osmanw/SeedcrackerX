@@ -11,11 +11,12 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.Queue;
 
+/** Filled by the finder threads, drained by the client tick. */
 public class BlockUpdateQueue {
     private final Queue<Pair<Thread, ArrayList<BlockPos>>> blocksAndAction = new LinkedList<>();
     private final HashSet<BlockPos> alreadyChecked = new HashSet<>();
 
-    public boolean add(ArrayList<BlockPos> blockPoses, BlockPos originPos, Thread operationAtEnd) {
+    public synchronized boolean add(ArrayList<BlockPos> blockPoses, BlockPos originPos, Thread operationAtEnd) {
         if (alreadyChecked.add(originPos)) {
             blocksAndAction.add(new Pair<>(operationAtEnd, blockPoses));
             return true;
@@ -23,7 +24,7 @@ public class BlockUpdateQueue {
         return false;
     }
 
-    public void tick() {
+    public synchronized void tick() {
         if (blocksAndAction.isEmpty()) return;
 
         Pair<Thread, ArrayList<BlockPos>> current = blocksAndAction.peek();

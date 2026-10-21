@@ -6,6 +6,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -33,7 +34,20 @@ public abstract class BlockFinder extends Finder {
         List<BlockPos> result = new ArrayList<>();
         ChunkAccess chunk = this.world.getChunk(this.chunkPos.getWorldPosition());
 
+        // A section whose palette lacks every target state can't contain one, so its blocks are never read.
+        LevelChunkSection[] sections = chunk.getSections();
+        boolean[] mayContainTarget = new boolean[sections.length];
+        boolean anySection = false;
+        for (int i = 0; i < sections.length; i++) {
+            mayContainTarget[i] = sections[i].maybeHas(this.targetBlockStates::contains);
+            anySection |= mayContainTarget[i];
+        }
+        if (!anySection) return result;
+
         for (BlockPos blockPos : this.searchPositions) {
+            int sectionIndex = chunk.getSectionIndex(blockPos.getY());
+            if (sectionIndex < 0 || sectionIndex >= sections.length || !mayContainTarget[sectionIndex]) continue;
+
             BlockState currentState = chunk.getBlockState(blockPos);
 
             if (this.targetBlockStates.contains(currentState)) {

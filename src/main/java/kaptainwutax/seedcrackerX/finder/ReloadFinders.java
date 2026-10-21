@@ -8,18 +8,23 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 public class ReloadFinders {
     public Minecraft client = Minecraft.getInstance();
 
     public static void reloadHeight(int minY, int maxY) {
-        Finder.CHUNK_POSITIONS.clear();
+        List<BlockPos> chunkPositions = new ArrayList<>(16 * 16 * Math.max(0, maxY - minY));
         for (int x = 0; x < 16; x++) {
             for (int z = 0; z < 16; z++) {
                 for (int y = minY; y < maxY; y++) {
-                    Finder.CHUNK_POSITIONS.add(new BlockPos(x, y, z));
+                    chunkPositions.add(new BlockPos(x, y, z));
                 }
             }
         }
+        Finder.CHUNK_POSITIONS = Collections.unmodifiableList(chunkPositions);
         Finder.heightContext = new HeightContext(minY, maxY);
 
         EmeraldOreFinder.reloadSearchPositions();
