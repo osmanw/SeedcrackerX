@@ -98,6 +98,17 @@ test {
 	useJUnitPlatform()
 }
 
+// End-to-end: ./gradlew runClientGameTest starts the client, creates a world and checks the mod cracks its seed.
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "seedcrackerx-gametest"
+		enableGameTests = false
+		enableClientGameTests = true
+		eula = true
+	}
+}
+
 // Times the lifting search against the previous implementation: ./gradlew liftingBenchmark
 tasks.register("liftingBenchmark", JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
