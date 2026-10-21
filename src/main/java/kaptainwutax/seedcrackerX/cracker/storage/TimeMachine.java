@@ -6,10 +6,9 @@ import com.seedfinding.mccore.rand.seed.PillarSeed;
 import com.seedfinding.mccore.rand.seed.StructureSeed;
 import com.seedfinding.mccore.version.MCVersion;
 import com.seedfinding.mcfeature.Feature;
-import com.seedfinding.mcfeature.structure.OldStructure;
 import com.seedfinding.mcfeature.structure.PillagerOutpost;
 import com.seedfinding.mcfeature.structure.RegionStructure;
-import com.seedfinding.mcfeature.structure.Shipwreck;
+import com.seedfinding.mcfeature.structure.UniformStructure;
 import com.seedfinding.mcseed.lcg.LCG;
 import kaptainwutax.seedcrackerX.SeedCracker;
 import kaptainwutax.seedcrackerX.config.Config;
@@ -132,7 +131,7 @@ public class TimeMachine {
         List<RegionStructure.Data<?>> dataList = new ArrayList<>();
 
         for (DataStorage.Entry<Feature.Data<?>> e : this.dataStorage.baseSeedData) {
-            if (e.data.feature instanceof OldStructure || e.data.feature instanceof Shipwreck) {
+            if (e.data.feature instanceof UniformStructure<?>) {
                 dataList.add((RegionStructure.Data<?>) e.data);
             }
         }

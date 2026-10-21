@@ -5,9 +5,7 @@ import com.seedfinding.mcfeature.Feature;
 import com.seedfinding.mcfeature.decorator.DesertWell;
 import com.seedfinding.mcfeature.decorator.EndGateway;
 import com.seedfinding.mcfeature.structure.BuriedTreasure;
-import com.seedfinding.mcfeature.structure.OldStructure;
 import com.seedfinding.mcfeature.structure.PillagerOutpost;
-import com.seedfinding.mcfeature.structure.Shipwreck;
 import com.seedfinding.mcfeature.structure.Structure;
 import com.seedfinding.mcfeature.structure.TriangularStructure;
 import com.seedfinding.mcfeature.structure.UniformStructure;
@@ -187,10 +185,9 @@ public class DataStorage {
         double bits = 0.0D;
 
         for (Entry<Feature.Data<?>> e : this.baseSeedData) {
-            if (e.data.feature instanceof OldStructure structure) {
+            // Temples, igloos, outposts, shipwrecks and trial chambers: every uniformly spread structure can be lifted.
+            if (e.data.feature instanceof UniformStructure<?> structure) {
                 bits += Math.log(structure.getOffset() * structure.getOffset()) / Math.log(2);
-            } else if (e.data.feature instanceof Shipwreck shipwreck) {
-                bits += Math.log(shipwreck.getOffset() * shipwreck.getOffset()) / Math.log(2);
             }
         }
         return bits;
